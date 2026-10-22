@@ -1,0 +1,155 @@
+name: Build MedDroid Providers (desktop + Microsoft Store)
+
+# Builds in THIS public repo because public repos get free GitHub Actions minutes (Windows + Mac
+# included); the private source repo (sanjaydoc/medicalandroid) ran out of paid minutes on 2026-10-22.
+# The source is checked out read-only with the SOURCE_REPO_TOKEN secret (fine-grained token,
+# medicalandroid → Contents: Read-only). Only the built installers are published here, as before.
+#
+# Output (same names as before, so the website links and the in-app updater keep working):
+#   release v1.0.N            MedDroid-Providers-Setup.exe / .dmg / .AppImage / .deb + latest*.yml (becomes "latest")
+#   pre-release store-v1.0.N  MedDroid-Providers-Store.appx (upload in Partner Center; Store ID 9NB19N035QJP)
+# N = 57 + this workflow's run number, so versions continue from the last private build (1.0.57).
+#
+# Trigger: Actions tab → Run workflow, or bump .github/desktop-build.txt.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/desktop-build.txt'
+
+permissions:
+  contents: write
+
+env:
+  VERSION_BASE: 57
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out the private source (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: sanjaydoc/medicalandroid
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the web UI (client/dist)
+        working-directory: src/client
+        run: |
+          npm install
+          npm run build
+
+      # Retries: Electron's binary download occasionally returns 504 from its CDN.
+      - name: Install desktop deps
+        working-directory: src/desktop
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm install && exit 0
+            echo "npm install failed (attempt $i), retrying in 20s"; sleep 20
+          done
+          exit 1
+
+      - name: Set build version
+        working-directory: src/desktop
+        shell: bash
+        run: npm version "1.0.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+
+      # All three OS jobs publish to the same release; stagger the start and retry so two jobs
+      # creating it at once don't lose an installer.
+      - name: Build & publish installers
+        working-directory: src/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in macOS) sleep 45 ;; Linux) sleep 20 ;; esac
+          for i in 1 2 3; do
+            npm run publish && exit 0
+            echo "::warning::publish attempt $i failed; retrying in 30s"
+            sleep 30
+          done
+          exit 1
+
+  # Microsoft Store package, same version as the installers. Pre-release, never "latest".
+  store:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the private source (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: sanjaydoc/medicalandroid
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the web UI (client/dist)
+        working-directory: src/client
+        run: |
+          npm install
+          npm run build
+
+      - name: Install desktop deps
+        working-directory: src/desktop
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm install && exit 0
+            echo "npm install failed (attempt $i), retrying in 20s"; sleep 20
+          done
+          exit 1
+
+      - name: Set build version
+        working-directory: src/desktop
+        shell: bash
+        run: npm version "1.0.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+
+      - name: Build Store package
+        working-directory: src/desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run copy:web
+          npx electron-builder --win appx --x64 --publish never
+          ls -la release
+
+      - name: Show package identity
+        working-directory: src/desktop
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [IO.Compression.ZipFile]::OpenRead("$PWD\release\MedDroid-Providers-Store.appx")
+          $e = $z.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' }
+          (New-Object IO.StreamReader($e.Open())).ReadToEnd() | Select-String -Pattern 'Identity|Publisher|Version'
+          $z.Dispose()
+
+      - name: Publish to a pre-release here
+        working-directory: src/desktop
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="store-v1.0.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
+          gh release create "$tag" release/MedDroid-Providers-Store.appx \
+            --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+            --title "MedDroid Providers ${tag#store-} (Microsoft Store package)" \
+            --notes "For upload in Microsoft Partner Center only. The Microsoft Store signs it after review; it can't be installed from here."
+          echo "::notice::Store package: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
