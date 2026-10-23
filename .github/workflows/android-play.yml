@@ -1,0 +1,187 @@
+name: Build Android release (Google Play bundle)
+
+# Builds in THIS public repo because public repos get free GitHub Actions minutes; the private
+# source repo (sanjaydoc/medicalandroid) is blocked by a billing limit (2026-10-23). Same build as
+# medicalandroid/.github/workflows/android-release.yml (Capacitor 8, targetSdk 36), moved here.
+# The source is checked out read-only with SOURCE_REPO_TOKEN (as in providers-desktop.yml).
+# Web env comes from the committed client/.env.production (public keys only).
+#
+# Upload-key secrets (THIS repo → Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Output: release play-v1.0.N (meddroid-release.aab, never "latest") + meddroid-beta.apk on main.
+# N = VERSION_BASE + run number; versionCode = 100 + N, continuing after the private builds
+# (last one there: play-v1.0.4 / versionCode 104).
+#
+# Trigger: Actions tab → Run workflow, or bump .github/play-build.txt.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/play-build.txt'
+
+permissions:
+  contents: write
+
+env:
+  VERSION_BASE: 10
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - name: Check out the private source (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: sanjaydoc/medicalandroid
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Install dependencies (Capacitor 8)
+        run: |
+          npm install
+          npm --prefix client install
+          npm i -D @capacitor/cli@^8
+          npm i @capacitor/core@^8 @capacitor/android@^8 @capacitor/camera@^8 @capacitor/app@^8 @capawesome/capacitor-file-picker@^8
+
+      - name: Build web app
+        env:
+          VITE_STATIC: 'true'
+        run: npm --prefix client run build
+
+      - name: Add & sync Android project
+        run: |
+          npx cap add android
+          M=android/app/src/main/AndroidManifest.xml
+          # Camera (MedDroid Scanner) + microphone (voice call): the WebView's requests
+          # become Android permission prompts. Hardware marked optional so tablets/
+          # phones without them can still install.
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n</manifest>#' $M
+          grep -n "permission\|uses-feature" $M
+          grep -n "SdkVersion" android/variables.gradle
+          npx cap sync android
+
+      - name: Generate app icon + splash (MedDroid)
+        run: |
+          for i in 1 2 3; do
+            npm i -D @capacitor/assets && \
+            npx @capacitor/assets generate --android --iconBackgroundColor '#ffffff' --iconBackgroundColorDark '#ffffff' && exit 0
+            echo "icon generation attempt $i failed; retrying"; sleep 20
+          done
+          exit 1
+
+      - name: Version + signing config
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          N=$((VERSION_BASE + GITHUB_RUN_NUMBER))
+          VC=$((100 + N))
+          VN="1.0.$N"
+          echo "versionCode=$VC versionName=$VN"
+          cat >> android/app/build.gradle <<EOF
+
+          // CI: Play needs an ever-increasing versionCode.
+          android { defaultConfig { versionCode $VC; versionName "$VN" } }
+          EOF
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > android/app/upload.jks
+            cat >> android/app/build.gradle <<'EOF'
+
+          // CI: sign release builds with the upload key (secrets → env).
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file('upload.jks')
+                      storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                      keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                      keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+                  }
+              }
+              buildTypes { release { signingConfig signingConfigs.release } }
+          }
+          EOF
+            echo "HAS_KEY=1" >> $GITHUB_ENV
+          else
+            echo "::warning::No ANDROID_KEYSTORE_B64 secret — building the test APK only (no Play bundle)."
+          fi
+
+      - name: Build test APK + signed bundle
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          TASKS="assembleDebug"
+          [ "$HAS_KEY" = "1" ] && TASKS="assembleDebug bundleRelease"
+          set +e
+          for i in 1 2; do
+            ./gradlew $TASKS --no-daemon --stacktrace 2>&1 | tee ../gradle.log
+            status=${PIPESTATUS[0]}
+            [ "$status" -eq 0 ] && break
+            echo "gradle attempt $i failed; retrying"; sleep 20
+          done
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -E -A12 "What went wrong|^e: |error:" ../gradle.log | head -60 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}')
+            echo "::error title=Gradle build failed::${msg}"
+          fi
+          exit $status
+
+      - name: Collect outputs
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/meddroid-beta.apk
+          if [ "$HAS_KEY" = "1" ]; then cp android/app/build/outputs/bundle/release/app-release.aab out/meddroid-release.aab; fi
+          ls -la out
+          rm -f android/app/upload.jks
+
+      - name: Publish Play bundle as a release here
+        if: env.HAS_KEY == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          N=$((VERSION_BASE + GITHUB_RUN_NUMBER))
+          gh release create "play-v1.0.$N" out/meddroid-release.aab \
+            --repo "$GITHUB_REPOSITORY" --latest=false \
+            --title "MedDroid Android 1.0.$N (Play bundle)" \
+            --notes "Signed Android App Bundle for Google Play. versionName 1.0.$N, versionCode $((100 + N)). Upload in Play Console → Testing → Closed testing → Create release."
+          echo "✅ https://github.com/$GITHUB_REPOSITORY/releases/tag/play-v1.0.$N"
+
+      # Keep the desktop links (releases/latest/download/…) on the newest v* desktop release.
+      - name: Keep the newest desktop release marked latest
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=50" --jq '[.[] | select(.prerelease|not) | select(.tag_name|test("^v[0-9]"))] | sort_by(.created_at) | last | .tag_name')
+          [ -n "$tag" ] && gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --latest && echo "latest = $tag"
+
+      - name: Publish test APK (meddroid-beta.apk)
+        run: |
+          git clone --depth 1 "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY.git" pubrepo
+          cp out/meddroid-beta.apk pubrepo/meddroid-beta.apk
+          cd pubrepo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add meddroid-beta.apk
+          git commit -m "Publish MedDroid beta APK (Capacitor 8 / Android 16)" || { echo "no change"; exit 0; }
+          git push origin HEAD:main
