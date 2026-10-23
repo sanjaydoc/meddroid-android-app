@@ -1,1 +1,3 @@
-build: 6
+Bump this file to build MedDroid Providers (desktop installers + Microsoft Store package).
+
+build: 7
