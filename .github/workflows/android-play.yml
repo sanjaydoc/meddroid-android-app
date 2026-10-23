@@ -60,7 +60,7 @@ jobs:
           npm install
           npm --prefix client install
           npm i -D @capacitor/cli@^8
-          npm i @capacitor/core@^8 @capacitor/android@^8 @capacitor/camera@^8 @capacitor/app@^8 @capawesome/capacitor-file-picker@^8
+          npm i @capacitor/core@^8 @capacitor/android@^8 @capacitor/camera@^8 @capacitor/app@^8 @capawesome/capacitor-file-picker@^8 @capacitor/share@^8 @capacitor/filesystem@^8
 
       - name: Build web app
         env:
