@@ -1,0 +1,97 @@
+name: Build MedDroid Sync (Sync Edition)
+
+# MedDroid Health OS · Sync Edition = the Sync box console (same desktop app, edition "sync",
+# desktop/electron-builder.sync.yml) for Windows and Linux. Builds in THIS public repo because public repos get free
+# GitHub Actions minutes; the private source repo (sanjaydoc/medicalandroid) has none left (billing, 2026-10-24).
+# The source is checked out read-only with SOURCE_REPO_TOKEN, exactly like providers-desktop.yml.
+#
+# Output: PRE-release v1.5.N (MedDroid-Sync-Setup.exe / .AppImage / .deb), so "latest" stays a Providers build.
+# N = 11 + this workflow's run number, so versions continue from the last private build (1.5.11). The Sync console's
+# Updates app lists these releases and shows desktop/sync-release-notes.md as "What changed".
+#
+# Trigger: Actions tab → Run workflow, or bump .github/sync-build.txt.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/sync-build.txt'
+
+permissions:
+  contents: write
+
+env:
+  VERSION_BASE: 11
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out the private source (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: sanjaydoc/medicalandroid
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the web UI (client/dist)
+        working-directory: src/client
+        run: |
+          npm install
+          npm run build
+
+      - name: Install desktop deps
+        working-directory: src/desktop
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm install && exit 0
+            echo "npm install failed (attempt $i), retrying in 20s"; sleep 20
+          done
+          exit 1
+
+      # Health OS 1.5 → versions 1.5.N, so tags never collide with the Providers v1.0.N releases.
+      - name: Set build version
+        working-directory: src/desktop
+        shell: bash
+        run: npm version "1.5.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+
+      - name: Build & publish Sync Edition
+        working-directory: src/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in Linux) sleep 20 ;; esac
+          for i in 1 2 3; do
+            npm run publish:sync && exit 0
+            echo "::warning::publish attempt $i failed; retrying in 30s"
+            sleep 30
+          done
+          exit 1
+
+      - name: Release notes for the Updates app
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="v1.5.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
+          API=https://api.github.com/repos/${{ github.repository }}/releases
+          for i in 1 2 3 4 5 6; do
+            ID=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$API/tags/$TAG" | jq -r .id) && [ "$ID" != "null" ] && break
+            sleep 20
+          done
+          jq -n --rawfile b src/desktop/sync-release-notes.md '{body: $b}' | curl -fsS -X PATCH -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "$API/$ID" > /dev/null
+          echo "Release notes set on $TAG"
