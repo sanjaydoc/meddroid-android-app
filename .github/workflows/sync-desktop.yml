@@ -5,7 +5,7 @@ name: Build MedDroid Sync (Sync Edition)
 # GitHub Actions minutes; the private source repo (sanjaydoc/medicalandroid) has none left (billing, 2026-10-24).
 # The source is checked out read-only with SOURCE_REPO_TOKEN, exactly like providers-desktop.yml.
 #
-# Output: PRE-release v1.5.N (MedDroid-Sync-Setup.exe / .AppImage / .deb), so "latest" stays a Providers build.
+# Output: PRE-release v1.6.N (1.5.N until build 13) (MedDroid-Sync-Setup.exe / .AppImage / .deb), so "latest" stays a Providers build.
 # N = 11 + this workflow's run number, so versions continue from the last private build (1.5.11). The Sync console's
 # Updates app lists these releases and shows desktop/sync-release-notes.md as "What changed".
 #
@@ -64,7 +64,7 @@ jobs:
       - name: Set build version
         working-directory: src/desktop
         shell: bash
-        run: npm version "1.5.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+        run: npm version "1.6.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
 
       - name: Build & publish Sync Edition
         working-directory: src/desktop
@@ -87,7 +87,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          TAG="v1.5.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
+          TAG="v1.6.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
           API=https://api.github.com/repos/${{ github.repository }}/releases
           for i in 1 2 3 4 5 6; do
             ID=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$API/tags/$TAG" | jq -r .id) && [ "$ID" != "null" ] && break

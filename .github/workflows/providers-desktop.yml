@@ -65,7 +65,7 @@ jobs:
       - name: Set build version
         working-directory: src/desktop
         shell: bash
-        run: npm version "1.0.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+        run: npm version "1.1.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
 
       # All three OS jobs publish to the same release; stagger the start and retry so two jobs
       # creating it at once don't lose an installer.
@@ -119,7 +119,7 @@ jobs:
       - name: Set build version
         working-directory: src/desktop
         shell: bash
-        run: npm version "1.0.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+        run: npm version "1.1.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
 
       - name: Build Store package
         working-directory: src/desktop
@@ -147,7 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="store-v1.0.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
+          tag="store-v1.1.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
           gh release create "$tag" release/MedDroid-Providers-Store.appx \
             --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
             --title "MedDroid Providers ${tag#store-} (Microsoft Store package)" \
