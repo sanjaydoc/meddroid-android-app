@@ -95,3 +95,74 @@ jobs:
           done
           jq -n --rawfile b src/desktop/sync-release-notes.md '{body: $b}' | curl -fsS -X PATCH -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "$API/$ID" > /dev/null
           echo "Release notes set on $TAG"
+
+  # Microsoft Store package of MedDroid Sync (2026-10-27), same version as the installers. Pre-release
+  # sync-store-v1.6.N, never "latest". Upload in Partner Center → MedDroid Sync; Microsoft signs it.
+  store:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the private source (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: sanjaydoc/medicalandroid
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the web UI (client/dist)
+        working-directory: src/client
+        run: |
+          npm install
+          npm run build
+
+      - name: Install desktop deps
+        working-directory: src/desktop
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm install && exit 0
+            echo "npm install failed (attempt $i), retrying in 20s"; sleep 20
+          done
+          exit 1
+
+      - name: Set build version
+        working-directory: src/desktop
+        shell: bash
+        run: npm version "1.6.$((VERSION_BASE + GITHUB_RUN_NUMBER))" --no-git-tag-version --allow-same-version
+
+      - name: Build Store package
+        working-directory: src/desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run copy:web
+          npx electron-builder -c electron-builder.sync.yml --win appx --x64 --publish never
+          ls -la release-sync
+
+      - name: Show package identity
+        working-directory: src/desktop
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [IO.Compression.ZipFile]::OpenRead("$PWD\release-sync\MedDroid-Sync-Store.appx")
+          $e = $z.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' }
+          (New-Object IO.StreamReader($e.Open())).ReadToEnd() | Select-String -Pattern 'Identity|Publisher|Version|StartupTask'
+          $z.Dispose()
+
+      - name: Publish to a pre-release here
+        working-directory: src/desktop
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="sync-store-v1.6.$((VERSION_BASE + GITHUB_RUN_NUMBER))"
+          gh release create "$tag" release-sync/MedDroid-Sync-Store.appx \
+            --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+            --title "MedDroid Sync ${tag#sync-store-} (Microsoft Store package)" \
+            --notes "For upload in Microsoft Partner Center only. The Microsoft Store signs it after review; it can't be installed from here."
+          echo "::notice::Store package: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
