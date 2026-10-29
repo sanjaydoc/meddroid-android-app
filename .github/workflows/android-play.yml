@@ -67,7 +67,13 @@ jobs:
       - name: Build web app
         env:
           VITE_STATIC: 'true'
-        run: npm --prefix client run build
+        run: |
+          npm --prefix client run build
+          # Android 15/16 draw apps edge to edge. Without viewport-fit=cover, Capacitor 8's SystemBars pads the
+          # WebView natively, so the header and the ask bar stay clear of the status bar and the gesture bar
+          # (founder 2026-10-29: first page pushed under both). The website keeps viewport-fit=cover.
+          sed -i 's/, *viewport-fit=cover//; s/viewport-fit=cover, *//' client/dist/index.html
+          grep -o '<meta name="viewport"[^>]*>' client/dist/index.html
 
       - name: Add & sync Android project
         run: |
