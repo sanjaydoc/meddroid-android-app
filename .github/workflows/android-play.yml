@@ -61,6 +61,8 @@ jobs:
           npm --prefix client install
           npm i -D @capacitor/cli@^8
           npm i @capacitor/core@^8 @capacitor/android@^8 @capacitor/camera@^8 @capacitor/app@^8 @capawesome/capacitor-file-picker@^8 @capacitor/share@^8 @capacitor/filesystem@^8
+          # Health Connect: daily steps + active calories (client/src/api/healthConnect.ts)
+          npm i capacitor-health@^8
 
       - name: Build web app
         env:
@@ -75,7 +77,13 @@ jobs:
           # become Android permission prompts. Hardware marked optional so tablets/
           # phones without them can still install.
           sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n</manifest>#' $M
-          grep -n "permission\|uses-feature" $M
+          # Health Connect (capacitor-health): read steps + active calories, the rationale activity
+          # (Android 13 and lower) and its Android 14+ alias, and the package query.
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.health.READ_STEPS" />\n    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />\n    <queries><package android:name="com.google.android.apps.healthdata" /></queries>\n</manifest>#' $M
+          sed -i 's#</application>#        <activity android:name="com.fit_up.health.capacitor.PermissionsRationaleActivity" android:exported="true"><intent-filter><action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" /></intent-filter></activity>\n        <activity-alias android:name="ViewPermissionUsageActivity" android:exported="true" android:targetActivity="com.fit_up.health.capacitor.PermissionsRationaleActivity" android:permission="android.permission.START_VIEW_PERMISSION_USAGE"><intent-filter><action android:name="android.intent.action.VIEW_PERMISSION_USAGE" /><category android:name="android.intent.category.HEALTH_PERMISSIONS" /></intent-filter></activity-alias>\n    </application>#' $M
+          # Health Connect's client library needs Android 8 (API 26) or newer.
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 26/' android/variables.gradle
+          grep -n "permission\|uses-feature\|health" $M
           grep -n "SdkVersion" android/variables.gradle
           npx cap sync android
 
@@ -179,9 +187,12 @@ jobs:
         run: |
           git clone --depth 1 "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY.git" pubrepo
           cp out/meddroid-beta.apk pubrepo/meddroid-beta.apk
+          # The website's download (Add a device, download buttons) serves meddroid.apk: keep it on the newest
+          # build too, since the private repo's android-apk.yml can't run (billing limit).
+          cp out/meddroid-beta.apk pubrepo/meddroid.apk
           cd pubrepo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add meddroid-beta.apk
+          git add meddroid-beta.apk meddroid.apk
           git commit -m "Publish MedDroid beta APK (Capacitor 8 / Android 16)" || { echo "no change"; exit 0; }
           git push origin HEAD:main

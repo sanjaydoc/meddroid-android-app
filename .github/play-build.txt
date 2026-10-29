@@ -1,0 +1,3 @@
+Bump this file to build the MedDroid Android app (Capacitor 8): meddroid-beta.apk + meddroid.apk, and the Play bundle when the upload key is set.
+
+build: 1
