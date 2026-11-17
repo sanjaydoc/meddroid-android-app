@@ -75,6 +75,19 @@ jobs:
           sed -i 's/, *viewport-fit=cover//; s/viewport-fit=cover, *//' client/dist/index.html
           grep -o '<meta name="viewport"[^>]*>' client/dist/index.html
 
+      # The website build carries thousands of search-engine pages and post images the app never opens
+      # (2026-11-17: the APK reached 120 MB and GitHub refused the push; its file limit is 100 MB).
+      # Remove those website-only folders from the copy that goes into the app. The website is not affected.
+      - name: Slim the app bundle (drop website-only SEO pages and post images)
+        run: |
+          cd client/dist
+          du -sh . | sed 's/^/before: /'
+          rm -rf tips social medicines diseases sitemap.xml sitemap*.xml
+          # translated SEO sections: any top-level folder that holds its own medicines/ or diseases/ pages
+          for d in */; do d="${d%/}"; if [ -d "$d/medicines" ] || [ -d "$d/diseases" ]; then rm -rf "$d"; fi; done
+          du -sh . | sed 's/^/after: /'
+          test -f index.html && test -d assets
+
       - name: Add & sync Android project
         run: |
           npx cap add android
@@ -229,6 +242,8 @@ jobs:
       - name: Publish test APK (meddroid-beta.apk)
         run: |
           git clone --depth 1 "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY.git" pubrepo
+          SIZE=$(stat -c %s out/meddroid-beta.apk); echo "APK size: $((SIZE / 1048576)) MB"
+          if [ "$SIZE" -ge 99000000 ]; then echo "::error::The APK is $((SIZE / 1048576)) MB. GitHub refuses files of 100 MB or more: slim client/dist further."; exit 1; fi
           cp out/meddroid-beta.apk pubrepo/meddroid-beta.apk
           # The website's download (Add a device, download buttons) serves meddroid.apk: keep it on the newest
           # build too, since the private repo's android-apk.yml can't run (billing limit).
