@@ -78,13 +78,16 @@ jobs:
       # The website build carries thousands of search-engine pages and post images the app never opens
       # (2026-11-17: the APK reached 120 MB and GitHub refused the push; its file limit is 100 MB).
       # Remove those website-only folders from the copy that goes into the app. The website is not affected.
-      - name: Slim the app bundle (drop website-only SEO pages and post images)
+      - name: Slim the app bundle (drop translated SEO pages and tip posters the app never opens)
         run: |
           cd client/dist
           du -sh . | sed 's/^/before: /'
-          rm -rf tips social medicines diseases sitemap.xml sitemap*.xml
-          # translated SEO sections: any top-level folder that holds its own medicines/ or diseases/ pages
-          for d in */; do d="${d%/}"; if [ -d "$d/medicines" ] || [ -d "$d/diseases" ]; then rm -rf "$d"; fi; done
+          # Only folders the app never links to. The English medicines/ and diseases/ guides and social/ STAY:
+          # the app's footer, Timeline and admin pages link to them (founder 2026-11-17: "don't break anything").
+          rm -rf tips sitemap.xml sitemap*.xml
+          # translated SEO sections (ar bn fr hi ja mr ms ta te ur): top-level folders with their own medicines/ or diseases/ pages
+          for d in */; do d="${d%/}"; case "$d" in medicines|diseases) continue;; esac; if [ -d "$d/medicines" ] || [ -d "$d/diseases" ]; then rm -rf "$d"; fi; done
+          test -d medicines && test -d diseases
           du -sh . | sed 's/^/after: /'
           test -f index.html && test -d assets
 
